@@ -1,0 +1,1068 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ZimNOC — Rural Network Operations Intelligence</title>
+<!-- prop-types must load before React UMD bundles that reference PropTypes -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prop-types/15.8.1/prop-types.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<!-- Recharts CDN intentionally removed: the 2.x UMD bundle on cdnjs ships a
+     broken Animate.js that crashes with "Cannot read properties of undefined
+     (reading 'oneOfType')". Charts are replaced with dependency-free SVG
+     sparklines that work correctly when opened from file:// too. -->
+<style>
+  :root {
+    --bg-void: #020508;
+    --bg-surface: #060d14;
+    --bg-elevated: #0a1520;
+    --bg-card: #0e1e2e;
+    --bg-card-hover: #112233;
+    --border: #1a3048;
+    --border-bright: #1f4060;
+    --accent-cyan: #00d4ff;
+    --accent-green: #00ff88;
+    --accent-amber: #ffb800;
+    --accent-red: #ff3b5c;
+    --accent-purple: #9d4edd;
+    --accent-orange: #ff6b2b;
+    --text-primary: #e8f4fd;
+    --text-secondary: #7ab0cc;
+    --text-muted: #3a6882;
+    --text-dim: #1f4060;
+    /* System font stacks — no Google Fonts needed, works on file:// */
+    --font-display: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    --font-mono: 'Consolas', 'Cascadia Code', 'Fira Mono', 'Courier New', monospace;
+    --font-ui: 'Consolas', 'Cascadia Code', 'Courier New', monospace;
+    --radius: 3px;
+    --glow-cyan: 0 0 20px rgba(0,212,255,0.3);
+    --glow-green: 0 0 20px rgba(0,255,136,0.3);
+    --glow-red: 0 0 20px rgba(255,59,92,0.3);
+    --glow-amber: 0 0 20px rgba(255,184,0,0.25);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg-void); color: var(--text-primary); font-family: var(--font-mono); overflow-x: hidden; }
+  #root { height: 100%; }
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: var(--bg-void); }
+  ::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 2px; }
+  button { cursor: pointer; font-family: var(--font-display); border: none; outline: none; }
+  button:focus-visible { outline: 2px solid var(--accent-cyan); outline-offset: 2px; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  @keyframes scanline { 0%{transform:translateY(-100%)} 100%{transform:translateY(100vh)} }
+  @keyframes blink { 0%,100%{opacity:1} 49%{opacity:1} 50%{opacity:0} }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+  @keyframes slideIn { from{opacity:0;transform:translateX(-12px)} to{opacity:1;transform:translateX(0)} }
+  @keyframes ripple { 0%{transform:scale(1);opacity:0.8} 100%{transform:scale(3);opacity:0} }
+  @keyframes dash { to{stroke-dashoffset:-20} }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+// Recharts removed — charts rendered with dependency-free SVG (see SparkLine component)
+
+// ─── DATA ─────────────────────────────────────────────────────────────
+const INITIAL_TOWERS = [
+  { id:'HRE-001', name:'Harare CBD',       city:'Harare',   lat:164, lng:320, status:'online', load:87, bandwidth:94,  uptime:99.2, subscribers:4820, lat_ms:12, packet_loss:0.1, type:'macro', coverage:45 },
+  { id:'HRE-002', name:'Harare North',     city:'Harare',   lat:130, lng:295, status:'online', load:62, bandwidth:71,  uptime:98.8, subscribers:3210, lat_ms:14, packet_loss:0.2, type:'macro', coverage:38 },
+  { id:'HRE-003', name:'Chitungwiza',      city:'Harare',   lat:195, lng:348, status:'degraded',load:91,bandwidth:45, uptime:94.1, subscribers:5200, lat_ms:28, packet_loss:1.8, type:'macro', coverage:30 },
+  { id:'BYO-001', name:'Bulawayo CBD',     city:'Bulawayo', lat:390, lng:168, status:'online', load:55, bandwidth:82,  uptime:99.5, subscribers:2980, lat_ms:22, packet_loss:0.1, type:'macro', coverage:42 },
+  { id:'BYO-002', name:'Bulawayo West',    city:'Bulawayo', lat:398, lng:140, status:'online', load:41, bandwidth:68,  uptime:99.1, subscribers:1840, lat_ms:24, packet_loss:0.3, type:'macro', coverage:35 },
+  { id:'GWE-001', name:'Gweru Central',    city:'Gweru',    lat:298, lng:238, status:'online', load:48, bandwidth:61,  uptime:98.3, subscribers:1620, lat_ms:31, packet_loss:0.4, type:'macro', coverage:28 },
+  { id:'MTR-001', name:'Mutare CBD',       city:'Mutare',   lat:200, lng:470, status:'online', load:59, bandwidth:74,  uptime:97.9, subscribers:2140, lat_ms:35, packet_loss:0.5, type:'macro', coverage:32 },
+  { id:'MSV-001', name:'Masvingo',         city:'Masvingo', lat:350, lng:340, status:'online', load:44, bandwidth:57,  uptime:98.1, subscribers:1390, lat_ms:38, packet_loss:0.6, type:'macro', coverage:30 },
+  { id:'KWE-001', name:'Kwekwe',           city:'Kwekwe',   lat:268, lng:200, status:'degraded',load:78,bandwidth:38, uptime:91.2, subscribers:1180, lat_ms:52, packet_loss:3.1, type:'macro', coverage:25 },
+  { id:'RUR-001', name:'Binga Rural',      city:'Rural',    lat:310, lng:90,  status:'online', load:28, bandwidth:22,  uptime:95.4, subscribers:380,  lat_ms:68, packet_loss:1.2, type:'rural', coverage:18 },
+  { id:'RUR-002', name:'Buhera Rural',     city:'Rural',    lat:248, lng:430, status:'offline', load:0, bandwidth:0,   uptime:0,    subscribers:0,    lat_ms:0,  packet_loss:100, type:'rural', coverage:0  },
+  { id:'RUR-003', name:'Gokwe Rural',      city:'Rural',    lat:220, lng:148, status:'online', load:35, bandwidth:19,  uptime:93.7, subscribers:290,  lat_ms:82, packet_loss:2.1, type:'rural', coverage:15 },
+  { id:'RUR-004', name:'Chipinge Rural',   city:'Rural',    lat:310, lng:490, status:'degraded',load:65,bandwidth:14, uptime:88.3, subscribers:420,  lat_ms:110,packet_loss:5.4, type:'rural', coverage:12 },
+  { id:'HRE-004', name:'Epworth',          city:'Harare',   lat:190, lng:310, status:'online', load:72, bandwidth:68,  uptime:97.5, subscribers:2860, lat_ms:18, packet_loss:0.4, type:'micro', coverage:20 },
+  { id:'BYO-003', name:'Nketa',            city:'Bulawayo', lat:405, lng:155, status:'online', load:50, bandwidth:59,  uptime:98.7, subscribers:1540, lat_ms:26, packet_loss:0.3, type:'micro', coverage:18 },
+];
+
+const LINKS = [
+  { from:'HRE-001', to:'HRE-002', capacity:1000, label:'Harare Ring N' },
+  { from:'HRE-001', to:'HRE-003', capacity:1000, label:'Harare Ring E' },
+  { from:'HRE-001', to:'HRE-004', capacity:622,  label:'CBD-Epworth' },
+  { from:'HRE-001', to:'GWE-001', capacity:622,  label:'Harare-Gweru' },
+  { from:'GWE-001', to:'BYO-001', capacity:622,  label:'Gweru-Bulawayo' },
+  { from:'GWE-001', to:'KWE-001', capacity:155,  label:'Gweru-Kwekwe' },
+  { from:'GWE-001', to:'MSV-001', capacity:155,  label:'Gweru-Masvingo' },
+  { from:'HRE-001', to:'MTR-001', capacity:310,  label:'Harare-Mutare' },
+  { from:'BYO-001', to:'BYO-002', capacity:622,  label:'Bulawayo Ring' },
+  { from:'BYO-001', to:'BYO-003', capacity:310,  label:'BYO-Nketa' },
+  { from:'BYO-001', to:'RUR-001', capacity:34,   label:'BYO-Binga' },
+  { from:'MSV-001', to:'RUR-002', capacity:34,   label:'MSV-Buhera' },
+  { from:'GWE-001', to:'RUR-003', capacity:34,   label:'GWE-Gokwe' },
+  { from:'MTR-001', to:'RUR-004', capacity:34,   label:'MTR-Chipinge' },
+  { from:'HRE-002', to:'HRE-001', capacity:1000, label:'Harare Ring S' },
+];
+
+const COVERAGE_GAPS = [
+  { id:'g1', lat:255, lng:280, radius:40, severity:'high',   name:'Midlands Desert Zone',  pop:12400, dist:82 },
+  { id:'g2', lat:180, lng:390, radius:35, severity:'medium', name:'Eastern Highlands Gap',  pop:7800,  dist:45 },
+  { id:'g3', lat:340, lng:200, radius:30, severity:'high',   name:'Mberengwa Dead Zone',    pop:9200,  dist:68 },
+  { id:'g4', lat:280, lng:420, radius:25, severity:'low',    name:'Save Valley Fringe',     pop:3400,  dist:32 },
+];
+
+const generateMetricHistory = (base, variance, points=20) =>
+  Array.from({length:points},(_,i)=>({ t:i, v: Math.max(0,Math.min(100,base + (Math.random()-0.5)*variance*2)) }));
+
+// ─── DIJKSTRA ─────────────────────────────────────────────────────────
+function dijkstra(towers, links, srcId, dstId, deadTowers=[]) {
+  const nodes = towers.map(t=>t.id);
+  const dist = {}; const prev = {}; const visited = new Set();
+  nodes.forEach(n=>{ dist[n]=Infinity; prev[n]=null; });
+  dist[srcId]=0;
+  const queue = [...nodes];
+  while(queue.length) {
+    queue.sort((a,b)=>dist[a]-dist[b]);
+    const u = queue.shift();
+    if(u===dstId) break;
+    if(dist[u]===Infinity) break;
+    visited.add(u);
+    const neighbors = links.filter(l=>(l.from===u||l.to===u));
+    for(const link of neighbors) {
+      const v = link.from===u ? link.to : link.from;
+      if(visited.has(v)) continue;
+      const towerV = towers.find(t=>t.id===v);
+      if(deadTowers.includes(v) || (towerV && towerV.status==='offline')) continue;
+      const towerU = towers.find(t=>t.id===u);
+      const latencyU = towerU ? towerU.lat_ms : 20;
+      const latencyV = towerV ? towerV.lat_ms : 20;
+      const capacityFactor = 1000/link.capacity;
+      const weight = latencyU + latencyV + capacityFactor * 5;
+      const alt = dist[u] + weight;
+      if(alt < dist[v]) { dist[v]=alt; prev[v]=u; }
+    }
+  }
+  const path=[]; let cur=dstId;
+  while(cur){ path.unshift(cur); cur=prev[cur]; }
+  return { path, cost: dist[dstId] };
+}
+
+// ─── STATUS HELPERS ───────────────────────────────────────────────────
+const statusColor = s => ({ online:'#00ff88', degraded:'#ffb800', offline:'#ff3b5c' }[s]||'#7ab0cc');
+const statusGlow  = s => ({ online:'0 0 8px rgba(0,255,136,0.6)', degraded:'0 0 8px rgba(255,184,0,0.6)', offline:'0 0 8px rgba(255,59,92,0.6)' }[s]||'none');
+const statusBg    = s => ({ online:'rgba(0,255,136,0.08)', degraded:'rgba(255,184,0,0.08)', offline:'rgba(255,59,92,0.08)' }[s]||'transparent');
+const loadColor   = v => v>85?'#ff3b5c':v>70?'#ffb800':'#00ff88';
+const severityColor = s => ({ high:'#ff3b5c', medium:'#ffb800', low:'#00d4ff' }[s]||'#7ab0cc');
+
+// ─── COMPONENTS ───────────────────────────────────────────────────────
+function StatusDot({ status, pulse=true }) {
+  return (
+    <span style={{ display:'inline-block', width:8, height:8, borderRadius:'50%',
+      background:statusColor(status), boxShadow:statusGlow(status),
+      animation: pulse&&status!=='offline' ? 'pulse 2s ease-in-out infinite' : 'none',
+      flexShrink:0 }} aria-label={`Status: ${status}`} />
+  );
+}
+
+function MetricBar({ value, max=100, color }) {
+  const pct = Math.min(100,(value/max)*100);
+  return (
+    <div style={{ height:4, background:'rgba(255,255,255,0.06)', borderRadius:2, overflow:'hidden' }}>
+      <div style={{ height:'100%', width:`${pct}%`, background:color||loadColor(pct),
+        borderRadius:2, transition:'width 0.5s ease',
+        boxShadow:`0 0 6px ${color||loadColor(pct)}` }} />
+    </div>
+  );
+}
+
+function Tag({ children, color='#00d4ff' }) {
+  return (
+    <span style={{ fontSize:9, fontFamily:'var(--font-display)', fontWeight:700, letterSpacing:'0.12em',
+      textTransform:'uppercase', color, background:`${color}18`, border:`1px solid ${color}30`,
+      padding:'2px 6px', borderRadius:2 }}>
+      {children}
+    </span>
+  );
+}
+
+function SectionHeader({ title, sub, action, actionLabel }) {
+  return (
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+      <div>
+        <div style={{ fontFamily:'var(--font-display)', fontWeight:700, fontSize:13,
+          letterSpacing:'0.15em', textTransform:'uppercase', color:'var(--text-secondary)' }}>
+          {title}
+        </div>
+        {sub && <div style={{ fontSize:10, color:'var(--text-muted)', marginTop:2 }}>{sub}</div>}
+      </div>
+      {action && (
+        <button onClick={action} style={{ fontSize:9, fontFamily:'var(--font-display)', fontWeight:700,
+          letterSpacing:'0.1em', textTransform:'uppercase', color:'var(--accent-cyan)',
+          background:'rgba(0,212,255,0.08)', border:'1px solid rgba(0,212,255,0.2)',
+          padding:'4px 10px', borderRadius:2, transition:'all 0.15s' }}
+          onMouseEnter={e=>{ e.currentTarget.style.background='rgba(0,212,255,0.15)'; }}
+          onMouseLeave={e=>{ e.currentTarget.style.background='rgba(0,212,255,0.08)'; }}>
+          {actionLabel}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ─── NETWORK MAP ──────────────────────────────────────────────────────
+function NetworkMap({ towers, links, selectedTower, onSelectTower, routePath, showGaps, gaps }) {
+  const W=560, H=520;
+  const getT = id => towers.find(t=>t.id===id);
+  const isOnPath = (a,b) => {
+    if(!routePath||routePath.length<2) return false;
+    for(let i=0;i<routePath.length-1;i++)
+      if((routePath[i]===a&&routePath[i+1]===b)||(routePath[i]===b&&routePath[i+1]===a)) return true;
+    return false;
+  };
+  const linkStatus = (l) => {
+    const ta=getT(l.from),tb=getT(l.to);
+    if(!ta||!tb) return 'offline';
+    if(ta.status==='offline'||tb.status==='offline') return 'offline';
+    if(ta.status==='degraded'||tb.status==='degraded') return 'degraded';
+    return 'online';
+  };
+
+  return (
+    <div style={{ position:'relative', background:'var(--bg-elevated)', border:'1px solid var(--border)',
+      borderRadius:4, overflow:'hidden' }}>
+      {/* Grid overlay */}
+      <div style={{ position:'absolute', inset:0, backgroundImage:
+        'linear-gradient(rgba(0,212,255,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(0,212,255,0.03) 1px,transparent 1px)',
+        backgroundSize:'40px 40px', pointerEvents:'none' }} />
+      <svg width={W} height={H} style={{ display:'block' }} role="img" aria-label="Zimbabwe network topology map">
+        <defs>
+          <filter id="glow-g"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+          <filter id="glow-r"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+          <marker id="arr" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L6,3 z" fill="rgba(0,212,255,0.4)" />
+          </marker>
+        </defs>
+
+        {/* Coverage gap zones */}
+        {showGaps && gaps.map(g=>(
+          <g key={g.id}>
+            <circle cx={g.lng} cy={g.lat} r={g.radius} fill={`${severityColor(g.severity)}12`}
+              stroke={severityColor(g.severity)} strokeWidth={1} strokeDasharray="5,3" opacity={0.7}/>
+            <text x={g.lng} y={g.lat+4} textAnchor="middle" fill={severityColor(g.severity)}
+              fontSize={8} fontFamily="var(--font-mono)" opacity={0.9}>⚠</text>
+          </g>
+        ))}
+
+        {/* Links */}
+        {links.map((l,i)=>{
+          const ta=getT(l.from),tb=getT(l.to);
+          if(!ta||!tb) return null;
+          const onPath=isOnPath(l.from,l.to);
+          const ls=linkStatus(l);
+          const color=onPath?'#00d4ff':ls==='online'?'#1a3048':ls==='degraded'?'#ffb80050':'#ff3b5c30';
+          const sw=onPath?2.5:ls==='online'?1:1.5;
+          return (
+            <line key={i} x1={ta.lng} y1={ta.lat} x2={tb.lng} y2={tb.lat}
+              stroke={color} strokeWidth={sw}
+              strokeDasharray={ls==='degraded'?'4,3':onPath?'none':'none'}
+              style={onPath?{animation:'dash 0.8s linear infinite',strokeDasharray:'8,4',strokeDashoffset:0}:{}}
+              opacity={onPath?1:0.8} />
+          );
+        })}
+
+        {/* Towers */}
+        {towers.map(t=>{
+          const sel=selectedTower?.id===t.id;
+          const onPath=routePath&&routePath.includes(t.id);
+          const r=t.type==='macro'?9:t.type==='micro'?7:6;
+          return (
+            <g key={t.id} style={{ cursor:'pointer' }} onClick={()=>onSelectTower(t)}
+              role="button" aria-label={`${t.name}: ${t.status}`}>
+              {(sel||onPath)&&(
+                <circle cx={t.lng} cy={t.lat} r={r+8} fill="none"
+                  stroke={onPath?'#00d4ff':statusColor(t.status)} strokeWidth={1.5}
+                  opacity={0.5} style={{ animation:'pulse 1.5s ease-in-out infinite' }} />
+              )}
+              <circle cx={t.lng} cy={t.lat} r={r} fill={statusBg(t.status)}
+                stroke={sel?'white':statusColor(t.status)}
+                strokeWidth={sel?2:1.5}
+                filter={t.status!=='offline'?'url(#glow-g)':undefined}
+                style={{ transition:'all 0.2s' }}/>
+              <circle cx={t.lng} cy={t.lat} r={3} fill={statusColor(t.status)} />
+              {(sel||t.status==='offline'||t.status==='degraded'||t.type==='rural') && (
+                <text x={t.lng+12} y={t.lat+4} fontSize={9} fill={sel?'white':'var(--text-secondary)'}
+                  fontFamily="var(--font-mono)" style={{ pointerEvents:'none' }}>
+                  {t.id}
+                </text>
+              )}
+            </g>
+          );
+        })}
+
+        {/* City labels */}
+        {[['Harare',320,148],['Bulawayo',168,415],['Gweru',238,282],['Mutare',470,188],['Masvingo',340,368]].map(([c,x,y])=>(
+          <text key={c} x={x} y={y} fontSize={10} fill="rgba(122,176,204,0.3)"
+            fontFamily="var(--font-display)" fontWeight={700} letterSpacing="0.12em"
+            textAnchor="middle" style={{ pointerEvents:'none', userSelect:'none' }}>
+            {c.toUpperCase()}
+          </text>
+        ))}
+      </svg>
+
+      {/* Legend */}
+      <div style={{ position:'absolute', bottom:10, left:10, display:'flex', flexDirection:'column', gap:4 }}>
+        {[['Online','#00ff88'],['Degraded','#ffb800'],['Offline','#ff3b5c']].map(([l,c])=>(
+          <div key={l} style={{ display:'flex', alignItems:'center', gap:5 }}>
+            <div style={{ width:8,height:8,borderRadius:'50%',background:c,boxShadow:`0 0 5px ${c}` }}/>
+            <span style={{ fontSize:9, color:'var(--text-muted)', fontFamily:'var(--font-display)', fontWeight:600, letterSpacing:'0.08em' }}>{l}</span>
+          </div>
+        ))}
+        {showGaps && <div style={{ display:'flex',alignItems:'center',gap:5 }}>
+          <div style={{ width:8,height:8,border:'1px dashed #ff3b5c',borderRadius:'50%' }}/>
+          <span style={{ fontSize:9,color:'var(--text-muted)',fontFamily:'var(--font-display)',fontWeight:600,letterSpacing:'0.08em' }}>Coverage Gap</span>
+        </div>}
+      </div>
+    </div>
+  );
+}
+
+// ─── TOWER CARD ───────────────────────────────────────────────────────
+function TowerCard({ tower, selected, onClick }) {
+  return (
+    <div onClick={onClick} role="button" aria-pressed={selected} tabIndex={0}
+      onKeyDown={e=>e.key==='Enter'&&onClick()}
+      style={{ padding:'10px 12px', background:selected?'var(--bg-card-hover)':'var(--bg-card)',
+        border:`1px solid ${selected?'var(--border-bright)':'var(--border)'}`,
+        borderLeft:`3px solid ${statusColor(tower.status)}`,
+        borderRadius:3, cursor:'pointer', transition:'all 0.15s', animation:'fadeIn 0.3s ease-out',
+        boxShadow:selected?`inset 0 0 20px rgba(0,212,255,0.03)`:'' }}>
+      <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:8 }}>
+        <StatusDot status={tower.status}/>
+        <span style={{ fontFamily:'var(--font-display)', fontWeight:700, fontSize:13, flex:1 }}>{tower.name}</span>
+        <Tag color={tower.type==='rural'?'#9d4edd':tower.type==='micro'?'#ff6b2b':'#00d4ff'}>{tower.type}</Tag>
+      </div>
+      <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:'4px 12px',marginBottom:8 }}>
+        {[['ID',tower.id],['Load',`${tower.load}%`],['BW',`${tower.bandwidth} Mbps`],['Subs',tower.subscribers.toLocaleString()]].map(([k,v])=>(
+          <div key={k}>
+            <div style={{ fontSize:9,color:'var(--text-muted)',fontFamily:'var(--font-display)',fontWeight:600,letterSpacing:'0.1em',textTransform:'uppercase' }}>{k}</div>
+            <div style={{ fontSize:11,color:k==='Load'?loadColor(tower.load):'var(--text-primary)',fontFamily:'var(--font-mono)' }}>{v}</div>
+          </div>
+        ))}
+      </div>
+      <MetricBar value={tower.load} color={loadColor(tower.load)}/>
+      <div style={{ marginTop:4,display:'flex',justifyContent:'space-between' }}>
+        <span style={{ fontSize:9,color:'var(--text-muted)' }}>Uptime: <span style={{ color:'#00ff88' }}>{tower.uptime}%</span></span>
+        <span style={{ fontSize:9,color:'var(--text-muted)' }}>Lat: <span style={{ color:tower.lat_ms>80?'#ff3b5c':tower.lat_ms>40?'#ffb800':'#00ff88' }}>{tower.lat_ms}ms</span></span>
+      </div>
+    </div>
+  );
+}
+
+// ─── ROUTING PANEL ────────────────────────────────────────────────────
+function RoutingPanel({ towers, links, routePath, setRoutePath }) {
+  const [src, setSrc] = useState('HRE-001');
+  const [dst, setDst] = useState('BYO-001');
+  const [result, setResult] = useState(null);
+
+  const compute = useCallback(() => {
+    const r = dijkstra(towers, links, src, dst);
+    setResult(r);
+    setRoutePath(r.path);
+  }, [towers, links, src, dst, setRoutePath]);
+
+  const clearRoute = () => { setResult(null); setRoutePath([]); };
+
+  const selStyle = { background:'var(--bg-elevated)', color:'var(--text-primary)', border:'1px solid var(--border)',
+    borderRadius:3, padding:'6px 8px', fontSize:11, fontFamily:'var(--font-mono)', width:'100%', outline:'none' };
+
+  const pathTowers = result?.path.map(id=>towers.find(t=>t.id===id)).filter(Boolean)||[];
+  const totalLat = pathTowers.reduce((a,t)=>a+(t.lat_ms||0),0);
+
+  return (
+    <div style={{ display:'flex',flexDirection:'column',gap:12 }}>
+      <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:8 }}>
+        <div>
+          <label style={{ display:'block',fontSize:9,color:'var(--text-muted)',marginBottom:4,fontFamily:'var(--font-display)',fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase' }}>SOURCE</label>
+          <select value={src} onChange={e=>setSrc(e.target.value)} style={selStyle} aria-label="Source tower">
+            {towers.filter(t=>t.status!=='offline').map(t=>(
+              <option key={t.id} value={t.id}>{t.id} — {t.name}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label style={{ display:'block',fontSize:9,color:'var(--text-muted)',marginBottom:4,fontFamily:'var(--font-display)',fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase' }}>DESTINATION</label>
+          <select value={dst} onChange={e=>setDst(e.target.value)} style={selStyle} aria-label="Destination tower">
+            {towers.filter(t=>t.status!=='offline').map(t=>(
+              <option key={t.id} value={t.id}>{t.id} — {t.name}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div style={{ display:'flex',gap:8 }}>
+        <button onClick={compute}
+          style={{ flex:1,padding:'8px',background:'rgba(0,212,255,0.12)',color:'var(--accent-cyan)',
+            border:'1px solid rgba(0,212,255,0.3)',borderRadius:3,fontSize:11,fontFamily:'var(--font-display)',
+            fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase',transition:'all 0.15s' }}
+          onMouseEnter={e=>e.currentTarget.style.background='rgba(0,212,255,0.2)'}
+          onMouseLeave={e=>e.currentTarget.style.background='rgba(0,212,255,0.12)'}>
+          Compute SPF Route
+        </button>
+        {result && (
+          <button onClick={clearRoute}
+            style={{ padding:'8px 12px',background:'rgba(255,59,92,0.08)',color:'var(--accent-red)',
+              border:'1px solid rgba(255,59,92,0.2)',borderRadius:3,fontSize:11,fontFamily:'var(--font-display)',
+              fontWeight:700,transition:'all 0.15s' }}>
+            Clear
+          </button>
+        )}
+      </div>
+
+      {result && (
+        <div style={{ background:'var(--bg-elevated)',border:'1px solid var(--border)',borderRadius:3,padding:12, animation:'fadeIn 0.3s ease' }}>
+          <div style={{ display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:10 }}>
+            {[['Hops',result.path.length,'var(--accent-cyan)'],
+              ['Total Lat',`${totalLat}ms`,'#00ff88'],
+              ['Cost',result.cost===Infinity?'N/A':Math.round(result.cost),'var(--accent-amber)']].map(([l,v,c])=>(
+              <div key={l} style={{ textAlign:'center' }}>
+                <div style={{ fontSize:18,fontFamily:'var(--font-display)',fontWeight:900,color:c }}>{v}</div>
+                <div style={{ fontSize:9,color:'var(--text-muted)',fontFamily:'var(--font-display)',fontWeight:600,letterSpacing:'0.1em',textTransform:'uppercase' }}>{l}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ borderTop:'1px solid var(--border)',paddingTop:10 }}>
+            <div style={{ fontSize:9,color:'var(--text-muted)',marginBottom:6,fontFamily:'var(--font-display)',fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase' }}>Route Path</div>
+            <div style={{ display:'flex',flexWrap:'wrap',gap:4,alignItems:'center' }}>
+              {result.path.map((id,i)=>{
+                const t=towers.find(x=>x.id===id);
+                return (
+                  <React.Fragment key={id}>
+                    <span style={{ fontSize:9,padding:'2px 6px',background:'rgba(0,212,255,0.1)',
+                      border:'1px solid rgba(0,212,255,0.2)',borderRadius:2,color:'var(--accent-cyan)',
+                      fontFamily:'var(--font-mono)' }}>
+                      {id}
+                    </span>
+                    {i<result.path.length-1&&<span style={{ color:'var(--text-dim)',fontSize:10 }}>›</span>}
+                  </React.Fragment>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── OUTAGE SIMULATOR ────────────────────────────────────────────────
+function OutageSimulator({ towers, setTowers, links }) {
+  const [simLog, setSimLog] = useState([]);
+
+  const log = msg => setSimLog(prev=>[{ msg, ts:new Date().toLocaleTimeString('en-GB',{hour12:false}), id:Date.now() },...prev].slice(0,12));
+
+  const simulateFailure = (towerId) => {
+    const t = towers.find(x=>x.id===towerId);
+    if(!t||t.status==='offline') return;
+    const affectedLinks = links.filter(l=>l.from===towerId||l.to===towerId);
+    const affectedTowers = [...new Set(affectedLinks.flatMap(l=>[l.from,l.to]).filter(id=>id!==towerId))];
+    const affectedSubs = t.subscribers;
+    setTowers(prev=>prev.map(x=>x.id===towerId?{...x,status:'offline',load:0,bandwidth:0,lat_ms:0,subscribers:0}:x));
+    log(`⚠ FAILURE: ${t.name} [${towerId}] went offline — ${affectedSubs.toLocaleString()} subscribers affected`);
+    // Simulate rerouting
+    setTimeout(()=>{
+      log(`↺ REROUTING: Traffic redistributed via ${affectedTowers.slice(0,2).join(', ')}`);
+    }, 800);
+  };
+
+  const simulateCongestion = (towerId) => {
+    const t = towers.find(x=>x.id===towerId);
+    if(!t) return;
+    setTowers(prev=>prev.map(x=>x.id===towerId?{...x,status:'degraded',load:Math.min(99,x.load+25),lat_ms:x.lat_ms*2.5,packet_loss:x.packet_loss+4}:x));
+    log(`⚡ CONGESTION: ${t.name} [${towerId}] overloaded — packet loss ↑ rerouting...`);
+  };
+
+  const restoreAll = () => {
+    setTowers(INITIAL_TOWERS);
+    setSimLog([]);
+    log('✓ RECOVERY: All towers restored to operational state');
+  };
+
+  const onlineTowers = towers.filter(t=>t.status!=='offline');
+
+  const selStyle = { background:'var(--bg-elevated)',color:'var(--text-primary)',border:'1px solid var(--border)',
+    borderRadius:3,padding:'6px 8px',fontSize:11,fontFamily:'var(--font-mono)',flex:1,outline:'none' };
+
+  const [simTarget, setSimTarget] = useState('HRE-003');
+
+  return (
+    <div style={{ display:'flex',flexDirection:'column',gap:12 }}>
+      <div style={{ display:'flex',gap:8 }}>
+        <select value={simTarget} onChange={e=>setSimTarget(e.target.value)} style={selStyle} aria-label="Simulation target tower">
+          {onlineTowers.map(t=>(
+            <option key={t.id} value={t.id}>{t.id} — {t.name}</option>
+          ))}
+        </select>
+      </div>
+      <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8 }}>
+        {[
+          ['Simulate Failure','#ff3b5c',()=>simulateFailure(simTarget)],
+          ['Simulate Congestion','#ffb800',()=>simulateCongestion(simTarget)],
+          ['Restore All','#00ff88',restoreAll],
+        ].map(([label,color,fn])=>(
+          <button key={label} onClick={fn}
+            style={{ padding:'8px 4px',background:`${color}10`,color,border:`1px solid ${color}30`,
+              borderRadius:3,fontSize:10,fontFamily:'var(--font-display)',fontWeight:700,
+              letterSpacing:'0.06em',textTransform:'uppercase',transition:'all 0.15s',cursor:'pointer' }}
+            onMouseEnter={e=>e.currentTarget.style.background=`${color}20`}
+            onMouseLeave={e=>e.currentTarget.style.background=`${color}10`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {simLog.length>0 && (
+        <div style={{ background:'var(--bg-void)',border:'1px solid var(--border)',borderRadius:3,
+          padding:10,maxHeight:180,overflowY:'auto' }} role="log" aria-live="polite" aria-label="Simulation event log">
+          <div style={{ fontSize:9,color:'var(--text-muted)',marginBottom:6,fontFamily:'var(--font-display)',fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase' }}>Event Log</div>
+          {simLog.map(e=>(
+            <div key={e.id} style={{ fontSize:10,color:'var(--text-secondary)',marginBottom:4,
+              fontFamily:'var(--font-mono)',display:'flex',gap:8, animation:'slideIn 0.2s ease' }}>
+              <span style={{ color:'var(--text-dim)',flexShrink:0 }}>{e.ts}</span>
+              <span>{e.msg}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── COVERAGE GAP PANEL ──────────────────────────────────────────────
+function CoverageGapPanel({ gaps, towers }) {
+  const totalPop = gaps.reduce((a,g)=>a+g.pop,0);
+  const highSeverity = gaps.filter(g=>g.severity==='high').length;
+
+  return (
+    <div style={{ display:'flex',flexDirection:'column',gap:10 }}>
+      <div style={{ display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8 }}>
+        {[['Gaps Found',gaps.length,'var(--accent-cyan)'],
+          ['Unserved',`${(totalPop/1000).toFixed(0)}K`,'#ff3b5c'],
+          ['Critical',highSeverity,'#ffb800']].map(([l,v,c])=>(
+          <div key={l} style={{ background:'var(--bg-elevated)',border:'1px solid var(--border)',borderRadius:3,padding:'8px 10px',textAlign:'center' }}>
+            <div style={{ fontSize:22,fontFamily:'var(--font-display)',fontWeight:900,color:c }}>{v}</div>
+            <div style={{ fontSize:9,color:'var(--text-muted)',fontFamily:'var(--font-display)',fontWeight:600,letterSpacing:'0.1em',textTransform:'uppercase' }}>{l}</div>
+          </div>
+        ))}
+      </div>
+
+      {gaps.map(g=>(
+        <div key={g.id} style={{ padding:'10px 12px',background:'var(--bg-elevated)',
+          border:`1px solid ${severityColor(g.severity)}30`,borderLeft:`3px solid ${severityColor(g.severity)}`,
+          borderRadius:3 }}>
+          <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:6 }}>
+            <Tag color={severityColor(g.severity)}>{g.severity}</Tag>
+            <span style={{ fontFamily:'var(--font-display)',fontWeight:700,fontSize:12,color:'var(--text-primary)' }}>{g.name}</span>
+          </div>
+          <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:4 }}>
+            <div style={{ fontSize:10,color:'var(--text-secondary)' }}>Unserved pop: <span style={{ color:severityColor(g.severity) }}>{g.pop.toLocaleString()}</span></div>
+            <div style={{ fontSize:10,color:'var(--text-secondary)' }}>Nearest tower: <span style={{ color:'var(--accent-cyan)' }}>{g.dist}km</span></div>
+          </div>
+          <div style={{ marginTop:8,padding:'6px 8px',background:`${severityColor(g.severity)}08`,
+            border:`1px dashed ${severityColor(g.severity)}30`,borderRadius:2,fontSize:10,color:'var(--text-secondary)' }}>
+            💡 Recommended: Deploy {g.severity==='high'?'macro BTS':'micro cell'} at optimal centroid — est. +{Math.round(g.pop*0.85).toLocaleString()} subscribers
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── SPARKLINE (pure SVG — no Recharts dependency) ───────────────────
+// Converts an array of {t, v} points into a smooth SVG area+line chart.
+// Works with file://, no external libraries, no animation crashes.
+function SparkLine({ data, color, height=40 }) {
+  if (!data || data.length < 2) return null;
+  const W = 300; // internal viewBox width
+  const H = height * 3; // internal viewBox height (scaled up for crisp rendering)
+  const pad = 4;
+  const minV = Math.min(...data.map(d=>d.v));
+  const maxV = Math.max(...data.map(d=>d.v));
+  const range = maxV - minV || 1;
+  const toX = i => pad + (i / (data.length - 1)) * (W - pad * 2);
+  const toY = v => H - pad - ((v - minV) / range) * (H - pad * 2);
+  const pts = data.map((d, i) => [toX(i), toY(d.v)]);
+
+  // Smooth polyline using cardinal spline approximation
+  let pathD = `M ${pts[0][0]} ${pts[0][1]}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const x0 = i > 0 ? pts[i-1][0] : pts[i][0];
+    const y0 = i > 0 ? pts[i-1][1] : pts[i][1];
+    const x1 = pts[i][0], y1 = pts[i][1];
+    const x2 = pts[i+1][0], y2 = pts[i+1][1];
+    const x3 = i < pts.length - 2 ? pts[i+2][0] : x2;
+    const y3 = i < pts.length - 2 ? pts[i+2][1] : y2;
+    const cp1x = x1 + (x2 - x0) / 6;
+    const cp1y = y1 + (y2 - y0) / 6;
+    const cp2x = x2 - (x3 - x1) / 6;
+    const cp2y = y2 - (y3 - y1) / 6;
+    pathD += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${x2} ${y2}`;
+  }
+  const areaD = `${pathD} L ${pts[pts.length-1][0]} ${H} L ${pts[0][0]} ${H} Z`;
+  const gradId = `sg_${color.replace(/[^a-z0-9]/gi,'_')}`;
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={height}
+      preserveAspectRatio="none" style={{ display:'block', overflow:'visible' }}
+      aria-hidden="true">
+      <defs>
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stopColor={color} stopOpacity="0.35"/>
+          <stop offset="100%" stopColor={color} stopOpacity="0"/>
+        </linearGradient>
+      </defs>
+      <path d={areaD} fill={`url(#${gradId})`} stroke="none"/>
+      <path d={pathD}  fill="none" stroke={color} strokeWidth="4"
+        strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+
+// ─── MAIN APP ─────────────────────────────────────────────────────────
+function App() {
+  const [towers, setTowers] = useState(INITIAL_TOWERS);
+  const [selectedTower, setSelectedTower] = useState(null);
+  const [activeTab, setActiveTab] = useState('map');
+  const [routePath, setRoutePath] = useState([]);
+  const [showGaps, setShowGaps] = useState(false);
+  const [tick, setTick] = useState(0);
+  const [metrics, setMetrics] = useState({
+    latency: generateMetricHistory(28,12),
+    throughput: generateMetricHistory(72,15),
+    packetLoss: generateMetricHistory(1.2,0.8),
+    subscribers: generateMetricHistory(85,8),
+  });
+
+  // Live metric simulation
+  useEffect(()=>{
+    const id = setInterval(()=>{
+      setTick(t=>t+1);
+      setTowers(prev=>prev.map(t=>{
+        if(t.status==='offline') return t;
+        const drift = (v,max,min=0)=>Math.max(min,Math.min(max,v+(Math.random()-0.5)*4));
+        return { ...t,
+          load: drift(t.load,99,5),
+          bandwidth: drift(t.bandwidth,150,5),
+          lat_ms: drift(t.lat_ms,200,5),
+          subscribers: Math.max(0,Math.round(t.subscribers+(Math.random()-0.48)*50)),
+        };
+      }));
+      setMetrics(prev=>{
+        const push = (arr,base,v)=>[...arr.slice(1),{t:arr[arr.length-1].t+1,v:Math.max(0,Math.min(100,base+(Math.random()-0.5)*v))}];
+        return {
+          latency: push(prev.latency,28,8),
+          throughput: push(prev.throughput,72,10),
+          packetLoss: push(prev.packetLoss,1.2,0.6),
+          subscribers: push(prev.subscribers,85,5),
+        };
+      });
+    }, 2500);
+    return ()=>clearInterval(id);
+  }, []);
+
+  const summary = useMemo(()=>({
+    online: towers.filter(t=>t.status==='online').length,
+    degraded: towers.filter(t=>t.status==='degraded').length,
+    offline: towers.filter(t=>t.status==='offline').length,
+    totalSubs: towers.reduce((a,t)=>a+t.subscribers,0),
+    avgLoad: Math.round(towers.filter(t=>t.status!=='offline').reduce((a,t)=>a+t.load,0)/towers.filter(t=>t.status!=='offline').length),
+    avgLat: Math.round(towers.filter(t=>t.lat_ms>0).reduce((a,t)=>a+t.lat_ms,0)/towers.filter(t=>t.lat_ms>0).length),
+  }), [towers]);
+
+  const tabs = [
+    { id:'map',    label:'Topology',  icon:'◈' },
+    { id:'towers', label:'Towers',    icon:'⬡' },
+    { id:'route',  label:'Routing',   icon:'↝' },
+    { id:'outage', label:'Simulator', icon:'⚡' },
+    { id:'gaps',   label:'Coverage',  icon:'◎' },
+  ];
+
+  return (
+    <div style={{ minHeight:'100vh',display:'flex',flexDirection:'column',background:'var(--bg-void)' }}>
+      {/* Header */}
+      <header style={{ borderBottom:'1px solid var(--border)',padding:'0 24px',
+        background:'var(--bg-surface)',position:'sticky',top:0,zIndex:100,
+        display:'flex',alignItems:'center',justifyContent:'space-between',height:56 }}>
+        <div style={{ display:'flex',alignItems:'center',gap:16 }}>
+          <div style={{ display:'flex',alignItems:'center',gap:10 }}>
+            <div style={{ width:32,height:32,background:'linear-gradient(135deg,#00d4ff,#0080aa)',
+              borderRadius:4,display:'flex',alignItems:'center',justifyContent:'center',
+              fontSize:16,fontWeight:900,boxShadow:'0 0 15px rgba(0,212,255,0.4)' }}>Z</div>
+            <div>
+              <div style={{ fontFamily:'var(--font-display)',fontWeight:900,fontSize:16,
+                letterSpacing:'0.05em',color:'var(--text-primary)' }}>ZimNOC</div>
+              <div style={{ fontSize:9,color:'var(--text-muted)',fontFamily:'var(--font-display)',
+                fontWeight:600,letterSpacing:'0.15em',textTransform:'uppercase' }}>Network Operations Intelligence</div>
+            </div>
+          </div>
+          <div style={{ width:1,height:28,background:'var(--border)' }}/>
+          <div style={{ display:'flex',gap:12 }}>
+            {[['Online',summary.online,'#00ff88'],['Degraded',summary.degraded,'#ffb800'],['Offline',summary.offline,'#ff3b5c']].map(([l,v,c])=>(
+              <div key={l} style={{ display:'flex',alignItems:'center',gap:5 }}>
+                <div style={{ width:7,height:7,borderRadius:'50%',background:c,animation:'pulse 2s ease-in-out infinite' }}/>
+                <span style={{ fontSize:11,fontFamily:'var(--font-display)',fontWeight:700,color:c }}>{v}</span>
+                <span style={{ fontSize:10,color:'var(--text-muted)' }}>{l}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={{ display:'flex',alignItems:'center',gap:20 }}>
+          {[['Subscribers',summary.totalSubs.toLocaleString()],['Avg Load',`${summary.avgLoad}%`],['Avg Latency',`${summary.avgLat}ms`]].map(([l,v])=>(
+            <div key={l} style={{ textAlign:'right' }}>
+              <div style={{ fontSize:13,fontFamily:'var(--font-display)',fontWeight:900,color:'var(--text-primary)' }}>{v}</div>
+              <div style={{ fontSize:9,color:'var(--text-muted)',fontFamily:'var(--font-display)',fontWeight:600,letterSpacing:'0.1em',textTransform:'uppercase' }}>{l}</div>
+            </div>
+          ))}
+          <div style={{ fontSize:9,color:'var(--text-dim)',fontFamily:'var(--font-mono)',
+            display:'flex',alignItems:'center',gap:5 }}>
+            <span style={{ width:5,height:5,borderRadius:'50%',background:'#00ff88',display:'inline-block',animation:'pulse 1s ease-in-out infinite' }}/>
+            LIVE
+          </div>
+        </div>
+      </header>
+
+      {/* KPI Strip */}
+      <div style={{ borderBottom:'1px solid var(--border)',background:'var(--bg-surface)',
+        padding:'10px 24px',display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:0 }}>
+        {[
+          { label:'Network Throughput', val:'avg 72 Mbps', data:metrics.throughput, color:'#00d4ff' },
+          { label:'Avg Latency',        val:`${summary.avgLat}ms`,data:metrics.latency,    color:'#00ff88' },
+          { label:'Packet Loss',        val:'1.2%',       data:metrics.packetLoss,  color:'#ffb800' },
+          { label:'Active Subscribers', val:summary.totalSubs.toLocaleString(),data:metrics.subscribers,color:'#9d4edd' },
+        ].map((m,i)=>(
+          <div key={m.label} style={{ padding:'6px 16px',borderRight:i<3?'1px solid var(--border)':'' }}>
+            <div style={{ display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:4 }}>
+              <span style={{ fontSize:9,color:'var(--text-muted)',fontFamily:'var(--font-display)',fontWeight:600,letterSpacing:'0.1em',textTransform:'uppercase' }}>{m.label}</span>
+              <span style={{ fontSize:13,fontFamily:'var(--font-display)',fontWeight:900,color:m.color }}>{m.val}</span>
+            </div>
+            <SparkLine data={m.data} color={m.color} height={32}/>
+          </div>
+        ))}
+      </div>
+
+      {/* Main content */}
+      <div style={{ flex:1,display:'flex',overflow:'hidden' }}>
+        {/* Sidebar */}
+        <aside style={{ width:56,borderRight:'1px solid var(--border)',background:'var(--bg-surface)',
+          display:'flex',flexDirection:'column',alignItems:'center',paddingTop:12,gap:4,flexShrink:0 }}>
+          {tabs.map(tab=>(
+            <button key={tab.id} onClick={()=>setActiveTab(tab.id)}
+              title={tab.label}
+              aria-label={tab.label}
+              aria-pressed={activeTab===tab.id}
+              style={{ width:40,height:40,borderRadius:4,fontSize:18,
+                background:activeTab===tab.id?'rgba(0,212,255,0.12)':'transparent',
+                color:activeTab===tab.id?'var(--accent-cyan)':'var(--text-muted)',
+                border:activeTab===tab.id?'1px solid rgba(0,212,255,0.25)':'1px solid transparent',
+                transition:'all 0.15s',display:'flex',alignItems:'center',justifyContent:'center' }}
+              onMouseEnter={e=>{ if(activeTab!==tab.id) { e.currentTarget.style.background='rgba(255,255,255,0.04)'; e.currentTarget.style.color='var(--text-secondary)'; }}}
+              onMouseLeave={e=>{ if(activeTab!==tab.id) { e.currentTarget.style.background='transparent'; e.currentTarget.style.color='var(--text-muted)'; }}}>
+              {tab.icon}
+            </button>
+          ))}
+        </aside>
+
+        {/* Content area */}
+        <div style={{ flex:1,display:'flex',overflow:'hidden' }}>
+          {/* Map panel */}
+          {activeTab==='map' && (
+            <div style={{ flex:1,display:'flex',gap:0,overflow:'hidden' }}>
+              <div style={{ flex:1,padding:16,overflow:'auto' }}>
+                <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12 }}>
+                  <div>
+                    <div style={{ fontFamily:'var(--font-display)',fontWeight:900,fontSize:18,letterSpacing:'0.03em' }}>Zimbabwe LTE Tower Topology</div>
+                    <div style={{ fontSize:10,color:'var(--text-muted)',marginTop:2 }}>{towers.length} nodes · {LINKS.length} links · Dijkstra SPF routing active</div>
+                  </div>
+                  <button onClick={()=>setShowGaps(g=>!g)}
+                    style={{ padding:'6px 14px',background:showGaps?'rgba(255,59,92,0.12)':'rgba(255,255,255,0.04)',
+                      color:showGaps?'#ff3b5c':'var(--text-muted)',border:`1px solid ${showGaps?'rgba(255,59,92,0.3)':'var(--border)'}`,
+                      borderRadius:3,fontSize:10,fontFamily:'var(--font-display)',fontWeight:700,
+                      letterSpacing:'0.1em',textTransform:'uppercase',transition:'all 0.15s' }}>
+                    {showGaps?'Hide':'Show'} Coverage Gaps
+                  </button>
+                </div>
+                <NetworkMap towers={towers} links={LINKS} selectedTower={selectedTower}
+                  onSelectTower={setSelectedTower} routePath={routePath} showGaps={showGaps} gaps={COVERAGE_GAPS}/>
+              </div>
+
+              {/* Tower detail panel */}
+              {selectedTower && (
+                <div style={{ width:260,borderLeft:'1px solid var(--border)',background:'var(--bg-surface)',
+                  padding:16,overflowY:'auto',animation:'slideIn 0.2s ease' }}>
+                  <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14 }}>
+                    <div style={{ fontFamily:'var(--font-display)',fontWeight:700,fontSize:12,letterSpacing:'0.15em',textTransform:'uppercase',color:'var(--text-secondary)' }}>Tower Detail</div>
+                    <button onClick={()=>setSelectedTower(null)} aria-label="Close detail panel"
+                      style={{ width:24,height:24,borderRadius:3,background:'rgba(255,255,255,0.04)',
+                        color:'var(--text-muted)',border:'1px solid var(--border)',fontSize:14 }}>×</button>
+                  </div>
+
+                  <div style={{ marginBottom:14 }}>
+                    <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:4 }}>
+                      <StatusDot status={selectedTower.status}/>
+                      <span style={{ fontFamily:'var(--font-display)',fontWeight:900,fontSize:16 }}>{selectedTower.name}</span>
+                    </div>
+                    <div style={{ fontSize:10,color:'var(--text-muted)' }}>{selectedTower.id} · {selectedTower.city}</div>
+                  </div>
+
+                  <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:14 }}>
+                    {[
+                      ['Status',selectedTower.status.toUpperCase(),statusColor(selectedTower.status)],
+                      ['Type',selectedTower.type,'var(--accent-cyan)'],
+                      ['Subscribers',selectedTower.subscribers.toLocaleString(),'var(--text-primary)'],
+                      ['Uptime',`${selectedTower.uptime}%`,'#00ff88'],
+                      ['Bandwidth',`${selectedTower.bandwidth} Mbps`,'var(--text-primary)'],
+                      ['Latency',`${selectedTower.lat_ms}ms`,selectedTower.lat_ms>80?'#ff3b5c':selectedTower.lat_ms>40?'#ffb800':'#00ff88'],
+                      ['Load',`${selectedTower.load}%`,loadColor(selectedTower.load)],
+                      ['Pkt Loss',`${selectedTower.packet_loss}%`,selectedTower.packet_loss>2?'#ff3b5c':selectedTower.packet_loss>1?'#ffb800':'#00ff88'],
+                    ].map(([k,v,c])=>(
+                      <div key={k} style={{ background:'var(--bg-elevated)',border:'1px solid var(--border)',borderRadius:3,padding:'8px 10px' }}>
+                        <div style={{ fontSize:9,color:'var(--text-muted)',fontFamily:'var(--font-display)',fontWeight:600,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:3 }}>{k}</div>
+                        <div style={{ fontSize:13,fontFamily:'var(--font-display)',fontWeight:700,color:c }}>{v}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ marginBottom:10 }}>
+                    <div style={{ fontSize:9,color:'var(--text-muted)',marginBottom:5,fontFamily:'var(--font-display)',fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase' }}>Load</div>
+                    <MetricBar value={selectedTower.load}/>
+                  </div>
+                  <div>
+                    <div style={{ fontSize:9,color:'var(--text-muted)',marginBottom:5,fontFamily:'var(--font-display)',fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase' }}>Bandwidth Utilisation</div>
+                    <MetricBar value={selectedTower.bandwidth} max={150} color='#00d4ff'/>
+                  </div>
+
+                  {selectedTower.status==='degraded' && (
+                    <div style={{ marginTop:14,padding:'8px 10px',background:'rgba(255,184,0,0.08)',
+                      border:'1px solid rgba(255,184,0,0.25)',borderRadius:3,fontSize:10,color:'#ffb800' }}>
+                      ⚠ Performance degraded — high packet loss detected. Consider rerouting traffic.
+                    </div>
+                  )}
+                  {selectedTower.status==='offline' && (
+                    <div style={{ marginTop:14,padding:'8px 10px',background:'rgba(255,59,92,0.08)',
+                      border:'1px solid rgba(255,59,92,0.25)',borderRadius:3,fontSize:10,color:'#ff3b5c' }}>
+                      ✗ Tower offline — all subscribers affected. Automatic failover initiated.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Towers list */}
+          {activeTab==='towers' && (
+            <div style={{ flex:1,padding:16,overflowY:'auto' }}>
+              <SectionHeader title="Tower Inventory" sub={`${towers.length} towers across Zimbabwe`}/>
+              <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))',gap:10 }}>
+                {towers.map(t=>(
+                  <TowerCard key={t.id} tower={t} selected={selectedTower?.id===t.id}
+                    onClick={()=>setSelectedTower(t===selectedTower?null:t)}/>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Routing */}
+          {activeTab==='route' && (
+            <div style={{ flex:1,padding:16,overflowY:'auto',maxWidth:700 }}>
+              <SectionHeader title="Dijkstra SPF Routing" sub="Shortest Path First — automatic failure-aware rerouting"/>
+              <div style={{ background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:4,padding:16,marginBottom:16 }}>
+                <RoutingPanel towers={towers} links={LINKS} routePath={routePath} setRoutePath={setRoutePath}/>
+              </div>
+              <div style={{ background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:4,padding:16 }}>
+                <SectionHeader title="Link Inventory" sub={`${LINKS.length} backbone links`}/>
+                <div style={{ display:'flex',flexDirection:'column',gap:6 }}>
+                  {LINKS.map((l,i)=>{
+                    const ta=towers.find(t=>t.id===l.from),tb=towers.find(t=>t.id===l.to);
+                    const ok=ta&&tb&&ta.status!=='offline'&&tb.status!=='offline';
+                    const deg=ta?.status==='degraded'||tb?.status==='degraded';
+                    return (
+                      <div key={i} style={{ display:'flex',alignItems:'center',gap:10,padding:'7px 10px',
+                        background:'var(--bg-elevated)',border:'1px solid var(--border)',borderRadius:3,fontSize:10 }}>
+                        <div style={{ width:7,height:7,borderRadius:'50%',flexShrink:0,
+                          background:ok?(deg?'#ffb800':'#00ff88'):'#ff3b5c',
+                          boxShadow:`0 0 5px ${ok?(deg?'#ffb800':'#00ff88'):'#ff3b5c'}` }}/>
+                        <span style={{ color:'var(--accent-cyan)',fontFamily:'var(--font-mono)',width:80,flexShrink:0 }}>{l.from}</span>
+                        <span style={{ color:'var(--text-dim)' }}>——›</span>
+                        <span style={{ color:'var(--accent-cyan)',fontFamily:'var(--font-mono)',width:80,flexShrink:0 }}>{l.to}</span>
+                        <span style={{ color:'var(--text-secondary)',flex:1 }}>{l.label}</span>
+                        <Tag color={l.capacity>=622?'#00d4ff':l.capacity>=155?'#00ff88':'#9d4edd'}>{l.capacity} Mbps</Tag>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Outage Simulator */}
+          {activeTab==='outage' && (
+            <div style={{ flex:1,padding:16,overflowY:'auto',maxWidth:700 }}>
+              <SectionHeader title="Outage & Congestion Simulator" sub="NOC-grade failure injection and auto-rerouting"/>
+              <div style={{ background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:4,padding:16,marginBottom:16 }}>
+                <OutageSimulator towers={towers} setTowers={setTowers} links={LINKS}/>
+              </div>
+              <div style={{ background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:4,padding:16 }}>
+                <SectionHeader title="Current Tower Health Matrix"/>
+                <div style={{ display:'flex',flexDirection:'column',gap:6 }}>
+                  {towers.map(t=>(
+                    <div key={t.id} style={{ display:'flex',alignItems:'center',gap:10,padding:'8px 12px',
+                      background:'var(--bg-elevated)',border:'1px solid var(--border)',borderRadius:3 }}>
+                      <StatusDot status={t.status}/>
+                      <span style={{ fontFamily:'var(--font-mono)',fontSize:10,color:'var(--accent-cyan)',width:72,flexShrink:0 }}>{t.id}</span>
+                      <span style={{ fontSize:11,fontFamily:'var(--font-display)',fontWeight:600,flex:1 }}>{t.name}</span>
+                      <div style={{ width:80 }}><MetricBar value={t.load}/></div>
+                      <span style={{ fontSize:10,color:t.lat_ms>80?'#ff3b5c':t.lat_ms>40?'#ffb800':'#00ff88',width:48,textAlign:'right',fontFamily:'var(--font-mono)' }}>{t.lat_ms}ms</span>
+                      <span style={{ fontSize:10,color:t.packet_loss>2?'#ff3b5c':t.packet_loss>1?'#ffb800':'#00ff88',width:48,textAlign:'right',fontFamily:'var(--font-mono)' }}>{t.packet_loss}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Coverage Gaps */}
+          {activeTab==='gaps' && (
+            <div style={{ flex:1,padding:16,overflowY:'auto',maxWidth:700 }}>
+              <SectionHeader title="Rural Coverage Gap Analyzer" sub="Identify underserved zones & optimal tower placement"/>
+              <div style={{ background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:4,padding:16,marginBottom:16 }}>
+                <CoverageGapPanel gaps={COVERAGE_GAPS} towers={towers}/>
+              </div>
+
+              {/* Subnet/CIDR calculator */}
+              <div style={{ background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:4,padding:16 }}>
+                <SectionHeader title="CIDR Subnet Planner" sub="Calculate address space for new rural deployments"/>
+                <CIDRCalculator/>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── CIDR CALCULATOR ─────────────────────────────────────────────────
+function CIDRCalculator() {
+  const [cidr, setCidr] = useState('192.168.10.0/24');
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+
+  const calculate = () => {
+    try {
+      setError('');
+      const [ip, prefix] = cidr.trim().split('/');
+      const pfx = parseInt(prefix, 10);
+      if(isNaN(pfx)||pfx<0||pfx>32) throw new Error('Invalid prefix length');
+      const parts = ip.split('.').map(Number);
+      if(parts.length!==4||parts.some(p=>isNaN(p)||p<0||p>255)) throw new Error('Invalid IP address');
+      const ipInt = parts.reduce((a,b)=>((a<<8)|b)>>>0);
+      const maskInt = pfx===0?0:(0xFFFFFFFF<<(32-pfx))>>>0;
+      const netInt = (ipInt&maskInt)>>>0;
+      const bcastInt = (netInt|(~maskInt>>>0))>>>0;
+      const hosts = pfx>=31?0:(bcastInt-netInt-1);
+      const toIP = n => [(n>>>24)&255,(n>>>16)&255,(n>>>8)&255,n&255].join('.');
+      setResult({
+        network: toIP(netInt)+'/'+pfx,
+        mask: toIP(maskInt),
+        broadcast: toIP(bcastInt),
+        first: toIP(netInt+1),
+        last: toIP(bcastInt-1),
+        hosts,
+        pfx,
+      });
+    } catch(e) {
+      setError(e.message);
+      setResult(null);
+    }
+  };
+
+  const inputStyle = { background:'var(--bg-elevated)',color:'var(--text-primary)',
+    border:`1px solid ${error?'rgba(255,59,92,0.4)':'var(--border)'}`,
+    borderRadius:3,padding:'8px 12px',fontSize:13,fontFamily:'var(--font-mono)',
+    flex:1,outline:'none',transition:'border 0.15s' };
+
+  return (
+    <div>
+      <div style={{ display:'flex',gap:8,marginBottom:error?8:0 }}>
+        <input value={cidr} onChange={e=>setCidr(e.target.value)} style={inputStyle}
+          placeholder="e.g. 10.10.0.0/22" aria-label="CIDR notation input"
+          onKeyDown={e=>e.key==='Enter'&&calculate()}/>
+        <button onClick={calculate}
+          style={{ padding:'8px 16px',background:'rgba(0,212,255,0.12)',color:'var(--accent-cyan)',
+            border:'1px solid rgba(0,212,255,0.3)',borderRadius:3,fontSize:11,
+            fontFamily:'var(--font-display)',fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase',
+            transition:'all 0.15s',cursor:'pointer' }}
+          onMouseEnter={e=>e.currentTarget.style.background='rgba(0,212,255,0.2)'}
+          onMouseLeave={e=>e.currentTarget.style.background='rgba(0,212,255,0.12)'}>
+          Calculate
+        </button>
+      </div>
+      {error && <div style={{ fontSize:10,color:'#ff3b5c',marginBottom:8 }}>⚠ {error}</div>}
+      {result && (
+        <div style={{ display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginTop:12, animation:'fadeIn 0.3s ease' }}>
+          {[
+            ['Network',result.network,'var(--accent-cyan)'],
+            ['Subnet Mask',result.mask,'var(--text-primary)'],
+            ['Broadcast',result.broadcast,'var(--text-primary)'],
+            ['First Host',result.first,'#00ff88'],
+            ['Last Host',result.last,'#00ff88'],
+            ['Usable Hosts',result.hosts.toLocaleString(),'#9d4edd'],
+          ].map(([l,v,c])=>(
+            <div key={l} style={{ background:'var(--bg-elevated)',border:'1px solid var(--border)',borderRadius:3,padding:'8px 10px' }}>
+              <div style={{ fontSize:9,color:'var(--text-muted)',fontFamily:'var(--font-display)',fontWeight:600,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:3 }}>{l}</div>
+              <div style={{ fontSize:12,fontFamily:'var(--font-mono)',color:c,wordBreak:'break-all' }}>{v}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── ERROR BOUNDARY ───────────────────────────────────────────────────
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(e) { return { error: e }; }
+  componentDidCatch(e, info) { console.error('[ZimNOC Error]', e, info); }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div style={{ minHeight:'100vh', background:'#020508', display:'flex', alignItems:'center',
+        justifyContent:'center', padding:32, fontFamily:'Consolas,monospace' }}>
+        <div style={{ maxWidth:640, background:'#0e1e2e', border:'1px solid #ff3b5c',
+          borderRadius:6, padding:32 }}>
+          <div style={{ color:'#ff3b5c', fontSize:18, fontWeight:700, marginBottom:16 }}>
+            ⚠ ZimNOC Runtime Error
+          </div>
+          <pre style={{ color:'#e8f4fd', fontSize:12, whiteSpace:'pre-wrap',
+            background:'#060d14', padding:16, borderRadius:4, overflowX:'auto' }}>
+            {String(this.state.error)}
+          </pre>
+          <div style={{ marginTop:16, color:'#7ab0cc', fontSize:11 }}>
+            Open the browser DevTools Console for the full stack trace.
+          </div>
+          <button onClick={()=>window.location.reload()}
+            style={{ marginTop:16, padding:'8px 20px', background:'rgba(255,59,92,0.15)',
+              color:'#ff3b5c', border:'1px solid rgba(255,59,92,0.4)', borderRadius:3,
+              cursor:'pointer', fontFamily:'inherit', fontSize:12 }}>
+            Reload
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <ErrorBoundary><App/></ErrorBoundary>
+);
+</script>
+</body>
+</html>
